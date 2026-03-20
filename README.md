@@ -1,6 +1,6 @@
-# SelectLines
+# Select lines
 
-`SelectLines` is a small C++ program that illustrates binary feature selection based on mutual information.
+`select_lines` is a small C++ program that illustrates binary feature selection based on mutual information and conditional mutual information. It is freely inspired from François Fleuret's paper (2004): "Fast Binary Feature Selection with Conditional Mutual Information".
 
 The program:
 - generates `T = 5000` random points in the square `[-1, 1] x [-1, 1]`
@@ -39,7 +39,7 @@ cmake --build build
 ## Run
 
 ```bash
-./build/SelectLines
+./build/select_lines
 ```
 
 Press any key in the OpenCV window at the end to close the application.
