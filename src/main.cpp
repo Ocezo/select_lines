@@ -662,7 +662,7 @@ int main()
             dispCmi(k + 1, cmi);
 
             // Small refresh
-            cv::waitKey(50);
+            cv::waitKey(20);
         }
 
         cout << "\nPress any key to continue...\n";
