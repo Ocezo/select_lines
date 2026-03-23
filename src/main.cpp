@@ -26,6 +26,37 @@ struct LineFeature
     int s;      // sign {-1, +1}
 };
 
+struct ProgramOptions
+{
+    bool gui = true;
+    unsigned int seed = std::random_device{}();
+};
+
+ProgramOptions parseArgs(int argc, char* argv[])
+{
+    ProgramOptions options;
+
+    for (int i = 1; i < argc; ++i)
+    {
+        const string arg = argv[i];
+
+        if (arg == "--no-gui")
+        {
+            options.gui = false;
+        }
+        else if (arg.rfind("--seed=", 0) == 0)
+        {
+            options.seed = static_cast<unsigned int>(stoul(arg.substr(7)));
+        }
+        else
+        {
+            throw std::runtime_error("Unknown argument: " + arg);
+        }
+    }
+
+    return options;
+}
+
 // ============================================================
 // Utility
 // ============================================================
@@ -109,84 +140,109 @@ vector<LineFeature> generateLineFeatures(int N, std::mt19937& rng)
 // Entropy / cardinalities
 // ============================================================
 
-int card1(const VectorXi& x, int u)
-{
-    int count = 0;
-    for (int i = 0; i < x.size(); ++i)
-    {
-        if (x(i) == u)
-        {
-            ++count;
-        }
-    }
-    return count;
-}
-
-int card2(const VectorXi& x, const VectorXi& y, int u, int v)
-{
-    int count = 0;
-    for (int i = 0; i < x.size(); ++i)
-    {
-        if (x(i) == u && y(i) == v)
-        {
-            ++count;
-        }
-    }
-    return count;
-}
-
-int card3(const VectorXi& x, const VectorXi& y, const VectorXi& z, int u, int v, int w)
-{
-    int count = 0;
-    for (int i = 0; i < x.size(); ++i)
-    {
-        if (x(i) == u && y(i) == v && z(i) == w)
-        {
-            ++count;
-        }
-    }
-    return count;
-}
-
-double H1(const VectorXi& Y)
+template <typename Derived>
+double H1(const Eigen::MatrixBase<Derived>& Y)
 {
     const int T = static_cast<int>(Y.size());
+    int counts[2] = {0, 0};
+
+    for (int i = 0; i < Y.size(); ++i)
+    {
+        ++counts[Y(i)];
+    }
+
     return safeLog2(static_cast<double>(T))
-         - (xi(card1(Y, 0), T) + xi(card1(Y, 1), T));
+         - (xi(counts[0], T) + xi(counts[1], T));
 }
 
-double H2(const VectorXi& Y, const VectorXi& Xn)
+template <typename DerivedY, typename DerivedX>
+double H2(const Eigen::MatrixBase<DerivedY>& Y, const Eigen::MatrixBase<DerivedX>& Xn)
 {
     const int T = static_cast<int>(Y.size());
+    int counts[2][2] = {{0, 0}, {0, 0}};
+
+    for (int i = 0; i < Y.size(); ++i)
+    {
+        ++counts[Y(i)][Xn(i)];
+    }
+
     return safeLog2(static_cast<double>(T))
-         - (xi(card2(Y, Xn, 0, 0), T)
-         +  xi(card2(Y, Xn, 0, 1), T)
-         +  xi(card2(Y, Xn, 1, 0), T)
-         +  xi(card2(Y, Xn, 1, 1), T));
+         - (xi(counts[0][0], T)
+         +  xi(counts[0][1], T)
+         +  xi(counts[1][0], T)
+         +  xi(counts[1][1], T));
 }
 
-double H3(const VectorXi& Y, const VectorXi& Xn, const VectorXi& Xm)
+template <typename DerivedY, typename DerivedX, typename DerivedZ>
+double H3(const Eigen::MatrixBase<DerivedY>& Y, const Eigen::MatrixBase<DerivedX>& Xn, const Eigen::MatrixBase<DerivedZ>& Xm)
 {
     const int T = static_cast<int>(Y.size());
-    return safeLog2(static_cast<double>(T))
-         - (xi(card3(Y, Xn, Xm, 0, 0, 0), T)
-         +  xi(card3(Y, Xn, Xm, 0, 0, 1), T)
-         +  xi(card3(Y, Xn, Xm, 0, 1, 0), T)
-         +  xi(card3(Y, Xn, Xm, 0, 1, 1), T)
-         +  xi(card3(Y, Xn, Xm, 1, 0, 0), T)
-         +  xi(card3(Y, Xn, Xm, 1, 0, 1), T)
-         +  xi(card3(Y, Xn, Xm, 1, 1, 0), T)
-         +  xi(card3(Y, Xn, Xm, 1, 1, 1), T));
+    int counts[2][2][2] = {};
+
+    for (int i = 0; i < Y.size(); ++i)
+    {
+        ++counts[Y(i)][Xn(i)][Xm(i)];
+    }
+
+    double sum = 0.0;
+    for (int a = 0; a < 2; ++a)
+    {
+        for (int b = 0; b < 2; ++b)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                sum += xi(counts[a][b][c], T);
+            }
+        }
+    }
+
+    return safeLog2(static_cast<double>(T)) - sum;
 }
 
-double mutInf(const VectorXi& Y, const VectorXi& Xn)
+template <typename DerivedY, typename DerivedX, typename DerivedZ>
+double condMutInfFast(const Eigen::MatrixBase<DerivedY>& Y,
+                      const Eigen::MatrixBase<DerivedX>& Xn,
+                      const Eigen::MatrixBase<DerivedZ>& Xm,
+                      double selectedFeatureBaseCmi)
 {
-    return H1(Y) + H1(Xn) - H2(Y, Xn);
-}
+    const int T = static_cast<int>(Y.size());
+    int counts2[2][2] = {{0, 0}, {0, 0}};
+    int counts3[2][2][2] = {};
 
-double condMutInf(const VectorXi& Y, const VectorXi& Xn, const VectorXi& Xm)
-{
-    return H2(Y, Xm) - H1(Xm) - H3(Y, Xn, Xm) + H2(Xn, Xm);
+    for (int i = 0; i < T; ++i)
+    {
+        const int xn = Xn(i);
+        const int xm = Xm(i);
+        ++counts2[xn][xm];
+        ++counts3[Y(i)][xn][xm];
+    }
+
+    double sum2 = 0.0;
+    for (int a = 0; a < 2; ++a)
+    {
+        for (int b = 0; b < 2; ++b)
+        {
+            sum2 += xi(counts2[a][b], T);
+        }
+    }
+
+    double sum3 = 0.0;
+    for (int a = 0; a < 2; ++a)
+    {
+        for (int b = 0; b < 2; ++b)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                sum3 += xi(counts3[a][b][c], T);
+            }
+        }
+    }
+
+    const double logT = safeLog2(static_cast<double>(T));
+    const double h2xnxm = logT - sum2;
+    const double h3yxnxm = logT - sum3;
+
+    return selectedFeatureBaseCmi - h3yxnxm + h2xnxm;
 }
 
 double Hp(const vector<double>& P)
@@ -241,73 +297,45 @@ MatrixXi buildMatrix(const MatrixXd& x, const vector<LineFeature>& f)
     return X;
 }
 
-VectorXi getColumn(const MatrixXi& X, int col)
-{
-    return X.col(col);
-}
-
 // ============================================================
 // Global mutual information
 // ============================================================
 
-string buildRowKey(const MatrixXi& X, int row, const vector<int>& cols)
-{
-    std::ostringstream oss;
-    for (size_t i = 0; i < cols.size(); ++i)
-    {
-        oss << X(row, cols[i]);
-        if (i + 1 < cols.size())
-        {
-            oss << ',';
-        }
-    }
-    return oss.str();
-}
-
-string buildRowKeyYX(const VectorXi& y, const MatrixXi& X, int row, const vector<int>& cols)
-{
-    std::ostringstream oss;
-    oss << y(row) << '|';
-    for (size_t i = 0; i < cols.size(); ++i)
-    {
-        oss << X(row, cols[i]);
-        if (i + 1 < cols.size())
-        {
-            oss << ',';
-        }
-    }
-    return oss.str();
-}
-
 double calcMi(const MatrixXi& X, const vector<int>& nu, int k, const VectorXi& y, double Hy, int T)
 {
-    vector<int> cols(nu.begin(), nu.begin() + k);
+    const int stateCountX = 1 << k;
+    const int stateCountYX = 1 << (k + 1);
 
-    map<string, int> countsX;
-    map<string, int> countsYX;
+    vector<int> countsX(stateCountX, 0);
+    vector<int> countsYX(stateCountYX, 0);
 
-    for (int i = 0; i < T; ++i)
+    for (int row = 0; row < T; ++row)
     {
-        countsX[buildRowKey(X, i, cols)]++;
-        countsYX[buildRowKeyYX(y, X, i, cols)]++;
+        int xState = 0;
+        for (int idx = 0; idx < k; ++idx)
+        {
+            xState = (xState << 1) | X(row, nu[idx]);
+        }
+
+        ++countsX[xState];
+        ++countsYX[(y(row) << k) | xState];
     }
 
-    vector<double> Px;
-    Px.reserve(countsX.size());
-    for (const auto& kv : countsX)
+    double sumX = 0.0;
+    for (int count : countsX)
     {
-        Px.push_back(static_cast<double>(kv.second) / static_cast<double>(T));
+        sumX += xi(count, T);
     }
 
-    vector<double> Pyx;
-    Pyx.reserve(countsYX.size());
-    for (const auto& kv : countsYX)
+    double sumYX = 0.0;
+    for (int count : countsYX)
     {
-        Pyx.push_back(static_cast<double>(kv.second) / static_cast<double>(T));
+        sumYX += xi(count, T);
     }
 
-    const double Hx = Hp(Px);
-    const double Hyx = Hp(Pyx);
+    const double logT = safeLog2(static_cast<double>(T));
+    const double Hx = logT - sumX;
+    const double Hyx = logT - sumYX;
 
     return Hy + Hx - Hyx;
 }
@@ -590,10 +618,11 @@ cv::Mat createCmiCanvas(const VectorXd& smax, const VectorXd& mi, double Hy, int
 // Main translated program
 // ============================================================
 
-int main()
+int main(int argc, char* argv[])
 {
     try
     {
+        const ProgramOptions options = parseArgs(argc, argv);
         // Parameters
         const double R = 0.5;
         const int T = 5000;
@@ -606,20 +635,26 @@ int main()
         vector<int> nu(K, -1);
         VectorXd smax = VectorXd::Zero(K);
         VectorXd mi = VectorXd::Zero(K);
+        VectorXd columnEntropy = VectorXd::Zero(N);
 
         // Random generator
-        std::random_device rd;
-        std::mt19937 rng(rd());
+        std::mt19937 rng(options.seed);
 
         // Generate data
         MatrixXd x = generatePoints(T, rng);
         VectorXi y = generateLabels(x, R);
         vector<LineFeature> fl = generateLineFeatures(N, rng);
 
+        cout << "Seed: " << options.seed << "\n";
+
         // Initial display
-        cv::Mat pointsCanvas = createPointsCanvas(x, y, 900, 900);
-        showLines(pointsCanvas, fl);
-        cv::imshow("Figure 1 - Points and line features", pointsCanvas);
+        cv::Mat pointsCanvas;
+        if (options.gui)
+        {
+            pointsCanvas = createPointsCanvas(x, y, 900, 900);
+            showLines(pointsCanvas, fl);
+            cv::imshow("Figure 1 - Points and line features", pointsCanvas);
+        }
 
         // Build boolean matrix X (stored as 0/1 integers)
         MatrixXi X = buildMatrix(x, fl);
@@ -628,7 +663,9 @@ int main()
         // Initial mutual information scores
         for (int n = 0; n < N; ++n)
         {
-            s(n) = mutInf(y, getColumn(X, n));
+            const auto Xn = X.col(n);
+            columnEntropy(n) = H1(Xn);
+            s(n) = Hy + columnEntropy(n) - H2(y, Xn);
         }
 
         // Main selection loop
@@ -643,31 +680,42 @@ int main()
 
             mi(k) = calcMi(X, nu, k + 1, y, Hy, T);
 
-            cv::Mat cmiCanvas = createCmiCanvas(smax, mi, Hy, k + 1);
-            cv::imshow("Figure 2 - CMI and Global MI", cmiCanvas);
+            if (options.gui)
+            {
+                cv::Mat cmiCanvas = createCmiCanvas(smax, mi, Hy, k + 1);
+                cv::imshow("Figure 2 - CMI and Global MI", cmiCanvas);
 
-            // Draw selected line
-            cv::Scalar color = calcColor(k, smax);
-            drawLineTri(pointsCanvas, fl[nu[k]].t, fl[nu[k]].d, color, 2, -1.0, 1.0, -1.0, 1.0);
-            cv::imshow("Figure 1 - Points and line features", pointsCanvas);
+                // Draw selected line
+                cv::Scalar color = calcColor(k, smax);
+                drawLineTri(pointsCanvas, fl[nu[k]].t, fl[nu[k]].d, color, 2, -1.0, 1.0, -1.0, 1.0);
+                cv::imshow("Figure 1 - Points and line features", pointsCanvas);
+            }
 
             // Update scores with conditional mutual information
-            VectorXi Xnu = getColumn(X, nu[k]);
+            const auto Xnu = X.col(nu[k]);
+            const double selectedFeatureBaseCmi = H2(y, Xnu) - columnEntropy(nu[k]);
             for (int n = 0; n < N; ++n)
             {
-                cmi(k, n) = condMutInf(y, getColumn(X, n), Xnu);
+                const auto Xn = X.col(n);
+                cmi(k, n) = condMutInfFast(y, Xn, Xnu, selectedFeatureBaseCmi);
                 s(n) = std::min(s(n), cmi(k, n));
             }
 
             dispCmi(k + 1, cmi);
 
-            // Small refresh
-            cv::waitKey(20);
+            if (options.gui)
+            {
+                // Small refresh
+                cv::waitKey(20);
+            }
         }
 
-        cout << "\nPress any key to continue...\n";
-        cv::waitKey(0);
-        cv::destroyAllWindows();
+        if (options.gui)
+        {
+            cout << "\nPress any key to continue...\n";
+            cv::waitKey(0);
+            cv::destroyAllWindows();
+        }
     }
     catch (const std::exception& e)
     {

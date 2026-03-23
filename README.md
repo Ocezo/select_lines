@@ -43,3 +43,35 @@ cmake --build build
 ```
 
 Press any key in the OpenCV window at the end to close the application.
+
+## Profiling
+
+A non-interactive mode is available for profiling:
+
+```bash
+./build/select_lines --no-gui
+```
+
+For reproducible runs, you can also provide a fixed seed:
+
+```bash
+./build/select_lines --no-gui --seed=12345
+```
+
+To build a profiling-friendly binary with `gprof` support:
+
+```bash
+cmake -S . -B build-prof \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DSELECT_LINES_ENABLE_PROFILING=ON \
+  -DSELECT_LINES_ENABLE_GPROF=ON
+cmake --build build-prof
+```
+
+Then run:
+
+```bash
+rm -f gmon.out
+./build-prof/select_lines --no-gui --seed=12345
+gprof ./build-prof/select_lines gmon.out
+```
