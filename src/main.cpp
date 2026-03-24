@@ -620,107 +620,104 @@ cv::Mat createCmiCanvas(const VectorXd& smax, const VectorXd& mi, double Hy, int
 
 int main(int argc, char* argv[])
 {
-    try
+    const ProgramOptions options = parseArgs(argc, argv);
+    // Parameters
+    const double R = 0.5;
+    const int T = 5000;
+    const int N = 500;
+    const int K = 15;
+
+    // Storage
+    VectorXd s = VectorXd::Zero(N);
+    MatrixXd cmi = MatrixXd::Zero(K, N);
+    vector<int> nu(K, -1);
+    VectorXd smax = VectorXd::Zero(K);
+    VectorXd mi = VectorXd::Zero(K);
+    VectorXd columnEntropy = VectorXd::Zero(N);
+
+    // Random generator
+    std::mt19937 rng(options.seed);
+
+    // Generate data
+    MatrixXd x = generatePoints(T, rng);
+    VectorXi y = generateLabels(x, R);
+    vector<LineFeature> fl = generateLineFeatures(N, rng);
+
+    cout << "Seed: " << options.seed << "\n";
+
+    // Initial display
+    cv::Mat pointsCanvas;
+    if (options.gui)
     {
-        const ProgramOptions options = parseArgs(argc, argv);
-        // Parameters
-        const double R = 0.5;
-        const int T = 5000;
-        const int N = 500;
-        const int K = 15;
+        cv::namedWindow("Figure 1 - Points and line features", cv::WINDOW_AUTOSIZE);
+        cv::namedWindow("Figure 2 - CMI and Global MI", cv::WINDOW_AUTOSIZE);
 
-        // Storage
-        VectorXd s = VectorXd::Zero(N);
-        MatrixXd cmi = MatrixXd::Zero(K, N);
-        vector<int> nu(K, -1);
-        VectorXd smax = VectorXd::Zero(K);
-        VectorXd mi = VectorXd::Zero(K);
-        VectorXd columnEntropy = VectorXd::Zero(N);
+        pointsCanvas = createPointsCanvas(x, y, 800, 800);
+        showLines(pointsCanvas, fl);
+        cv::imshow("Figure 1 - Points and line features", pointsCanvas);
+    }
 
-        // Random generator
-        std::mt19937 rng(options.seed);
+    // Build boolean matrix X (stored as 0/1 integers)
+    MatrixXi X = buildMatrix(x, fl);
+    const double Hy = H1(y);
 
-        // Generate data
-        MatrixXd x = generatePoints(T, rng);
-        VectorXi y = generateLabels(x, R);
-        vector<LineFeature> fl = generateLineFeatures(N, rng);
+    // Initial mutual information scores
+    for (int n = 0; n < N; ++n)
+    {
+        const auto Xn = X.col(n);
+        columnEntropy(n) = H1(Xn);
+        s(n) = Hy + columnEntropy(n) - H2(y, Xn);
+    }
 
-        cout << "Seed: " << options.seed << "\n";
+    // Main selection loop
+    for (int k = 0; k < K; ++k)
+    {
+        // Select best informative feature
+        Eigen::Index bestIdx;
+        smax(k) = s.maxCoeff(&bestIdx);
+        nu[k] = static_cast<int>(bestIdx);
 
-        // Initial display
-        cv::Mat pointsCanvas;
+        dispScores(s, k + 1, nu, smax(k));
+
+        mi(k) = calcMi(X, nu, k + 1, y, Hy, T);
+
         if (options.gui)
         {
-            pointsCanvas = createPointsCanvas(x, y, 900, 900);
-            showLines(pointsCanvas, fl);
+            cv::Mat cmiCanvas = createCmiCanvas(smax, mi, Hy, k + 1);
+            cv::moveWindow("Figure 2 - CMI and Global MI", 1000, 100);
+            cv::imshow("Figure 2 - CMI and Global MI", cmiCanvas);
+
+            // Draw selected line
+            cv::Scalar color = calcColor(k, smax);
+            drawLineTri(pointsCanvas, fl[nu[k]].t, fl[nu[k]].d, color, 2, -1.0, 1.0, -1.0, 1.0);
+            cv::moveWindow("Figure 1 - Points and line features", 100, 100);
             cv::imshow("Figure 1 - Points and line features", pointsCanvas);
         }
 
-        // Build boolean matrix X (stored as 0/1 integers)
-        MatrixXi X = buildMatrix(x, fl);
-        const double Hy = H1(y);
-
-        // Initial mutual information scores
+        // Update scores with conditional mutual information
+        const auto Xnu = X.col(nu[k]);
+        const double selectedFeatureBaseCmi = H2(y, Xnu) - columnEntropy(nu[k]);
         for (int n = 0; n < N; ++n)
         {
             const auto Xn = X.col(n);
-            columnEntropy(n) = H1(Xn);
-            s(n) = Hy + columnEntropy(n) - H2(y, Xn);
+            cmi(k, n) = condMutInfFast(y, Xn, Xnu, selectedFeatureBaseCmi);
+            s(n) = std::min(s(n), cmi(k, n));
         }
 
-        // Main selection loop
-        for (int k = 0; k < K; ++k)
-        {
-            // Select best informative feature
-            Eigen::Index bestIdx;
-            smax(k) = s.maxCoeff(&bestIdx);
-            nu[k] = static_cast<int>(bestIdx);
-
-            dispScores(s, k + 1, nu, smax(k));
-
-            mi(k) = calcMi(X, nu, k + 1, y, Hy, T);
-
-            if (options.gui)
-            {
-                cv::Mat cmiCanvas = createCmiCanvas(smax, mi, Hy, k + 1);
-                cv::imshow("Figure 2 - CMI and Global MI", cmiCanvas);
-
-                // Draw selected line
-                cv::Scalar color = calcColor(k, smax);
-                drawLineTri(pointsCanvas, fl[nu[k]].t, fl[nu[k]].d, color, 2, -1.0, 1.0, -1.0, 1.0);
-                cv::imshow("Figure 1 - Points and line features", pointsCanvas);
-            }
-
-            // Update scores with conditional mutual information
-            const auto Xnu = X.col(nu[k]);
-            const double selectedFeatureBaseCmi = H2(y, Xnu) - columnEntropy(nu[k]);
-            for (int n = 0; n < N; ++n)
-            {
-                const auto Xn = X.col(n);
-                cmi(k, n) = condMutInfFast(y, Xn, Xnu, selectedFeatureBaseCmi);
-                s(n) = std::min(s(n), cmi(k, n));
-            }
-
-            dispCmi(k + 1, cmi);
-
-            if (options.gui)
-            {
-                // Small refresh
-                cv::waitKey(20);
-            }
-        }
+        dispCmi(k + 1, cmi);
 
         if (options.gui)
         {
-            cout << "\nPress any key to continue...\n";
-            cv::waitKey(0);
-            cv::destroyAllWindows();
+            // Small refresh
+            cv::waitKey(20);
         }
     }
-    catch (const std::exception& e)
+
+    if (options.gui)
     {
-        std::cerr << "Error: " << e.what() << '\n';
-        return EXIT_FAILURE;
+        cout << "\nPress any key to continue...\n";
+        cv::waitKey(0);
+        cv::destroyAllWindows();
     }
 
     return EXIT_SUCCESS;
